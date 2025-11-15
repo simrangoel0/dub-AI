@@ -1,67 +1,85 @@
 import json
+import os
 from dotenv import load_dotenv
-from langchain.chat_models import ChatOpenAI
 
-from backend.core.models import ContextSelectionResult, ScoredChunk
+from langchain_community.chat_models import ValyuChat
+from langchain_core.messages import SystemMessage, HumanMessage
+
+from backend.core.models import ContextSelectionResult
 
 load_dotenv()
 
 
-def get_llm(model: str = "gpt-4o-mini", temperature: float = 0.0):
-    return ChatOpenAI(model=model, temperature=temperature)
+def get_llm():
+    """Create the Valyu LLM client used for attribution scoring."""
+    return ValyuChat(
+        api_key=os.getenv("VALYU_API_TOKEN"),
+        team_id=os.getenv("VALYU_TEAM_ID"),
+        model=os.getenv("VALYU_MODEL"),
+        endpoint=os.getenv("VALYU_API_ENDPOINT"),
+        max_retries=2,
+    )
 
 
 class AttributionAgent:
-    def __init__(self, model: str = "gpt-4o-mini"):
-        self.llm = get_llm(model)
+    """
+    Computes influence scores for all selected chunks.
+
+    Input:
+        - ContextSelectionResult
+        - AnswerAgent output dict
+
+    Output:
+        dict with:
+            "influence_scores": { chunk_id: float }
+    """
+
+    def __init__(self):
+        self.llm = get_llm()
 
     @staticmethod
     def _build_prompt(context: ContextSelectionResult, answer_output: dict) -> str:
         """
-        The model sees:
-        - final output
-        - every selected chunk with chunk_id and text
-        
-        The model returns JSON:
-        { "chunk_1": 0.7, "chunk_4": 0.2 }
+        Construct the attribution instruction block.
         """
-        final_output = answer_output.get("final_output", "")
+        final_output = answer_output["final_output"]
+        chunk_sections = []
 
-        chunk_blocks = []
         for scored in context.selected_chunks:
             c = scored.chunk
-            chunk_blocks.append(f"[{c.chunk_id}]\n{c.text.strip()}\n")
+            chunk_sections.append(f"[{c.chunk_id}]\n{c.text.strip()}\n")
 
-        chunk_text = "\n".join(chunk_blocks)
+        all_chunks_text = "\n".join(chunk_sections)
 
         return (
-            "You are an attribution judge. Rate how much each context chunk influenced "
-            "the final output. Return scores from 0 to 1.\n\n"
+            "Rate how much each chunk influenced the final output. "
+            "Assign a score from 0 to 1 for each chunk.\n\n"
             f"Final output:\n{final_output}\n\n"
-            "Context chunks:\n"
-            f"{chunk_text}\n"
-            "Return ONLY valid JSON, like:\n"
-            "{ \"chunk_1\": 0.5, \"chunk_2\": 0.9 }\n"
+            f"Chunks:\n{all_chunks_text}\n"
+            "Return only valid JSON mapping chunk ids to scores.\n"
         )
 
     def run(self, context: ContextSelectionResult, answer_output: dict) -> dict:
+        """
+        Generate influence scores for each chunk.
+        """
         prompt = self._build_prompt(context, answer_output)
 
-        raw = self.llm.invoke(
-            [
-                {"role": "system", "content": "Only return JSON."},
-                {"role": "user", "content": prompt}
-            ]
-        ).content.strip()
+        messages = [
+            SystemMessage(content="Provide only valid JSON."),
+            HumanMessage(content=prompt),
+        ]
+
+        raw = self.llm.invoke(messages).content.strip()
 
         try:
             parsed = json.loads(raw)
         except Exception:
             parsed = {sc.chunk.chunk_id: 0.0 for sc in context.selected_chunks}
 
-        influence_scores = {}
-        for scored in context.selected_chunks:
-            cid = scored.chunk.chunk_id
-            influence_scores[cid] = float(parsed.get(cid, 0.0))
+        influence_scores = {
+            sc.chunk.chunk_id: float(parsed.get(sc.chunk.chunk_id, 0.0))
+            for sc in context.selected_chunks
+        }
 
         return {"influence_scores": influence_scores}
