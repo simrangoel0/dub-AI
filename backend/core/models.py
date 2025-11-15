@@ -33,8 +33,8 @@ class ContextSelectionResult(BaseModel):
     Final output of your context manager for a single query.
     This is what Dev B (API) and Dev A2 (answer agent) will consume.
     """
-    query: str
-    top_k: int
-    selected_chunks: List[ScoredChunk]
-    dropped_chunks: List[ScoredChunk]
-    meta: Dict[str, Any] = {}
+    query: str # whatever the user typed into the chat
+    top_k: int # how many chunks were selected 
+    selected_chunks: List[ScoredChunk] 
+    dropped_chunks: List[ScoredChunk] 
+    meta: Dict[str, Any] = {} # metadata 
