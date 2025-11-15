@@ -1,63 +1,62 @@
-from __future__ import annotations
+from typing import List, Dict, Any
 
-from typing import List
-
-from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.core.models import ContextSelectionResult, ScoredChunk
-from backend.agents.react_agent_setup import get_chat_model
+from holistic_ai_bedrock import get_chat_model
 
 
 class AnswerAgent:
     """
-    ReAct agent that produces the final answer using the selected context chunks.
+    Final answering agent.
 
-    Input:
-        ContextSelectionResult
-
-    Output:
-        dict with:
-            final_output: str
-            full_prompt: str
+    Takes the selected context from the context manager and the user query,
+    and calls the Holistic AI Bedrock LLM once to produce a final answer.
     """
 
-    def __init__(self, tools: List | None = None) -> None:
-        llm = get_chat_model()
-        self.agent = create_react_agent(llm, tools or [])
+    def __init__(self, model_name: str = "claude-3-5-sonnet"):
+        # Directly use your tutorial helper
+        self.llm = get_chat_model(model_name)
 
-    @staticmethod
-    def _format_chunks(chunks: list[ScoredChunk]) -> str:
+    def _format_chunks(self, chunks: List[ScoredChunk]) -> str:
         """
-        Turn selected chunks into a readable block of text for the prompt.
+        Convert selected chunks into a readable context string.
         """
-        parts: list[str] = []
+        blocks: List[str] = []
         for scored in chunks:
             c = scored.chunk
-            header = f"[{c.chunk_id}] from {c.file_path} (lines {c.start_line}-{c.end_line})"
-            body = c.text.strip()
-            parts.append(f"{header}\n{body}\n")
-        return "\n".join(parts)
+            blocks.append(
+                f"[{c.chunk_id}] {c.file_path} (lines {c.start_line}-{c.end_line})\n"
+                f"{c.text.strip()}\n"
+            )
+        return "\n".join(blocks)
 
-    def run(self, context: ContextSelectionResult) -> dict:
+    def run(self, selection: ContextSelectionResult) -> Dict[str, Any]:
         """
-        Run the ReAct agent on the given context selection.
+        Execute the answer step.
+
+        Args:
+            selection: ContextSelectionResult produced by the context manager.
+
+        Returns:
+            A dictionary with:
+                - "final_answer": str
+                - "prompt_used": str (for observability)
         """
-        chunk_text = self._format_chunks(context.selected_chunks)
+        context_text = self._format_chunks(selection.selected_chunks)
 
         system_prompt = (
-            "You are a careful debugging assistant. "
-            "Use only the provided context chunks when reasoning about the answer."
+            "You are a careful debugging assistant.\n"
+            "You are given code chunks and a user question about the code.\n"
+            "Use only the information in those chunks. If something is not "
+            "present in the context, say that it is not available instead of guessing."
         )
 
         user_prompt = (
-            f"User request:\n{context.query}\n\n"
-            "Relevant context chunks:\n"
-            f"{chunk_text}\n"
-            "Instructions:\n"
-            "1. Focus on code debugging and explanations.\n"
-            "2. If information is missing, state that clearly.\n"
-            "3. Do not reveal chain of thought.\n"
+            f"User query:\n{selection.query}\n\n"
+            f"Relevant code chunks:\n{context_text}\n\n"
+            "Write a clear, step by step explanation that answers the query.\n"
+            "If there are multiple plausible interpretations, call them out explicitly."
         )
 
         messages = [
@@ -65,10 +64,9 @@ class AnswerAgent:
             HumanMessage(content=user_prompt),
         ]
 
-        result = self.agent.invoke({"messages": messages})
-        final_msg = result["messages"][-1]
+        response = self.llm.invoke(messages)
 
         return {
-            "final_output": final_msg.content,
-            "full_prompt": system_prompt + "\n\n" + user_prompt,
+            "final_answer": response.content.strip(),
+            "prompt_used": system_prompt + "\n\n" + user_prompt,
         }

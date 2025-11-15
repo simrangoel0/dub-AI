@@ -1,91 +1,80 @@
-from __future__ import annotations
-
 import json
+from typing import Dict, Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.core.models import ContextSelectionResult
-from backend.agents.react_agent_setup import get_chat_model
+from holistic_ai_bedrock import get_chat_model
 
 
 class AttributionAgent:
     """
-    Computes an influence score for each selected chunk.
+    Attribution and observability agent.
 
-    Input:
-        context: ContextSelectionResult
-        answer_output: dict from AnswerAgent.run
-
-    Output:
-        dict:
-            {
-                "influence_scores": {chunk_id: float in [0, 1], ...}
-            }
+    Given the context selection and the final answer, this agent asks the LLM
+    to score how influential each chunk was on a 0 to 1 scale.
     """
 
-    def __init__(self) -> None:
-        self.llm = get_chat_model()
+    def __init__(self, model_name: str = "claude-3-5-sonnet"):
+        self.llm = get_chat_model(model_name)
 
-    @staticmethod
-    def _build_prompt(
-        context: ContextSelectionResult,
-        answer_output: dict,
-    ) -> str:
-        final_answer = answer_output["final_output"]
+    def run(self, selection: ContextSelectionResult, answer_result: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Compute per chunk attribution scores.
 
-        chunk_blocks: list[str] = []
-        chunk_ids: list[str] = []
+        Args:
+            selection: ContextSelectionResult used for answering.
+            answer_result: Output from AnswerAgent.run (must contain "final_answer").
 
-        for scored in context.selected_chunks:
+        Returns:
+            Dict mapping chunk_id -> influence score in [0, 1].
+        """
+        final_answer = answer_result.get("final_answer", "")
+
+        # Build chunk display string
+        chunk_blocks = []
+        for scored in selection.selected_chunks:
             c = scored.chunk
-            chunk_ids.append(c.chunk_id)
             chunk_blocks.append(
-                f"[{c.chunk_id}] from {c.file_path} (lines {c.start_line}-{c.end_line})\n"
+                f"[{c.chunk_id}]\n"
+                f"File: {c.file_path} (lines {c.start_line}-{c.end_line})\n"
                 f"{c.text.strip()}\n"
             )
+        chunk_text = "\n\n".join(chunk_blocks)
 
-        id_list = ", ".join(f'"{cid}"' for cid in chunk_ids)
-
-        schema_hint = (
-            "{\n"
-            '  "influence_scores": {\n'
-            f"    {id_list}: number between 0 and 1\n"
-            "  }\n"
-            "}"
+        system = SystemMessage(
+            content=(
+                "You are an analysis tool that outputs JSON only. "
+                "Do not include any explanation, only a JSON object."
+            )
         )
 
-        return (
-            "You are an attribution judge.\n"
-            "Your task is to estimate how much each context chunk influenced "
-            "the final answer. The score must be between 0 and 1.\n\n"
-            f"Final answer:\n{final_answer}\n\n"
-            "Context chunks:\n"
-            f"{''.join(chunk_blocks)}\n"
-            "Return only valid JSON with this shape:\n"
-            f"{schema_hint}\n"
+        user = HumanMessage(
+            content=(
+                "The assistant produced the following final answer based on some code chunks.\n\n"
+                f"Final answer:\n{final_answer}\n\n"
+                f"Code chunks:\n{chunk_text}\n\n"
+                "For each chunk id, assign an influence score between 0 and 1 that reflects "
+                "how important that chunk was for the final answer.\n"
+                "Return a single JSON object that maps chunk_id to score. Example:\n"
+                "{ \"chunk_a\": 0.8, \"chunk_b\": 0.1 }\n"
+            )
         )
 
-    def run(self, context: ContextSelectionResult, answer_output: dict) -> dict:
-        prompt = self._build_prompt(context, answer_output)
-
-        messages = [
-            SystemMessage(content="Return only valid JSON. No explanation."),
-            HumanMessage(content=prompt),
-        ]
-
-        raw = self.llm.invoke(messages).content.strip()
+        raw = self.llm.invoke([system, user]).content.strip()
 
         try:
             parsed = json.loads(raw)
-            scores = parsed.get("influence_scores", {})
         except Exception:
-            # Safe fallback: zero for all chunks
-            scores = {sc.chunk.chunk_id: 0.0 for sc in context.selected_chunks}
+            # Fallback if the model does not return valid JSON
+            parsed = {}
 
-        # Ensure all chunks have a float score
-        influence_scores = {
-            sc.chunk.chunk_id: float(scores.get(sc.chunk.chunk_id, 0.0))
-            for sc in context.selected_chunks
-        }
+        scores: Dict[str, float] = {}
+        for scored in selection.selected_chunks:
+            cid = scored.chunk.chunk_id
+            try:
+                scores[cid] = float(parsed.get(cid, 0.0))
+            except (TypeError, ValueError):
+                scores[cid] = 0.0
 
-        return {"influence_scores": influence_scores}
+        return scores
