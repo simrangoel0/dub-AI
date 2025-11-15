@@ -3,6 +3,7 @@ uvicorn
 langchain
 langchain-community
 langchain-core
+langchain-valyu
 pydantic
 faiss-cpu
 numpy
