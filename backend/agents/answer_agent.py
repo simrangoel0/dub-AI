@@ -10,11 +10,11 @@ class AnswerAgent:
     """
     Debug-focused answer generator.
 
-    Responsibilities:
-    - Convert selected chunks into a structured context block.
-    - Guide the LLM to behave like a programming-debugging helper.
-    - Force grounding strictly in the provided context.
-    - Ask the model to explicitly state which chunks it relied on.
+    Enhancements:
+    - Uses rationales, similarity_score and relevance_score for better grounding.
+    - Produces a clearer analysis section tied directly to chunk ids.
+    - More defensive about incomplete context.
+    - Instructs the LLM to treat code separately from plain text.
     """
 
     def __init__(self, model_name: str = "claude-3-5-sonnet"):
@@ -22,50 +22,57 @@ class AnswerAgent:
 
     @staticmethod
     def _format_chunks(chunks: List[ScoredChunk]) -> str:
-        out = []
+        blocks = []
         for sc in chunks:
             c = sc.chunk
-            block = (
-                f"[{c.chunk_id}] from {c.file_path} "
-                f"(lines {c.start_line}-{c.end_line})\n"
-                f"{c.text.strip()}\n"
+            blocks.append(
+                f"[{c.chunk_id}] from {c.file_path} (lines {c.start_line}-{c.end_line})\n"
+                f"Similarity score: {sc.similarity_score:.3f}\n"
+                f"Relevance score: {sc.relevance_score:.3f}\n"
+                f"Selection rationale: {sc.rationale}\n"
+                f"Chunk text:\n{c.text.strip()}\n"
             )
-            out.append(block)
-        return "\n".join(out)
+        return "\n".join(blocks)
 
     def run(self, ctx: ContextSelectionResult) -> Dict:
-        chunk_text = self._format_chunks(ctx.selected_chunks)
+        """
+        Returns:
+            dict with final_answer, used_chunks, full_prompt
+        """
+        chunk_block = self._format_chunks(ctx.selected_chunks)
+        used = [sc.chunk.chunk_id for sc in ctx.selected_chunks]
 
-        system_prompt = (
-            "You are a highly reliable programming-debugging assistant. "
-            "Your job is to analyse code, detect bugs, explain behaviour, "
-            "and propose fixes using ONLY the provided context chunks. "
-            "Do not speculate about code that is not included. "
-            "Be precise and cite which chunks you rely on."
+        system = (
+            "You are a debugging oriented assistant. "
+            "Your job is to analyse code, identify issues, explain behaviour, "
+            "and propose specific fixes based only on the provided chunks.\n\n"
+            "Important rules:\n"
+            "1. Never use information not present in the chunks.\n"
+            "2. If the code snippet looks partial, missing lines, or incomplete, mention this.\n"
+            "3. Treat content as code unless clearly plain text.\n"
+            "4. Reference chunk ids whenever describing evidence.\n"
+            "5. Provide a short high level analysis (not chain of thought).\n"
+            "6. Then provide the final debugging answer.\n"
         )
 
-        user_prompt = (
+        user = (
             f"User query:\n{ctx.query}\n\n"
             "Relevant context chunks:\n"
-            f"{chunk_text}\n\n"
-            "Instructions:\n"
-            "1. Carefully read all chunks.\n"
-            "2. Identify which chunks contain information relevant to the query.\n"
-            "3. Explain your reasoning in a short 'analysis' section that references chunk IDs.\n"
-            "4. Then provide the final answer or debugging guidance.\n"
-            "5. NEVER include chain-of-thought. The analysis must be short, high-level, and chunk-grounded.\n"
+            f"{chunk_block}\n\n"
+            "Write output with two sections:\n"
+            "Analysis: short, high level, grounded in chunk ids.\n"
+            "Final Answer: solve the query.\n"
         )
 
         messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
+            SystemMessage(content=system),
+            HumanMessage(content=user),
         ]
 
-        resp = self.llm.invoke(messages)
-        final = resp.content.strip()
+        response_text = self.llm.invoke(messages).content.strip()
 
         return {
-            "final_answer": final,
-            "used_chunks": [sc.chunk.chunk_id for sc in ctx.selected_chunks],
-            "full_prompt": system_prompt + "\n\n" + user_prompt,
+            "final_answer": response_text,
+            "used_chunks": used,
+            "full_prompt": system + "\n\n" + user,
         }
