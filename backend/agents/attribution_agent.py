@@ -1,168 +1,91 @@
 from __future__ import annotations
 
 import json
-import os
-from typing import List
 
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field, ValidationError
-
-from langchain_valyu import ValyuChat
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.core.models import ContextSelectionResult
-
-load_dotenv()
-
-
-class ChunkInfluence(BaseModel):
-    """
-    Influence information for a single chunk.
-    """
-    chunk_id: str = Field(description="The chunk_id from the context manager.")
-    score: float = Field(
-        description="Influence score between 0 and 1.",
-        ge=0.0,
-        le=1.0,
-    )
-    rationale: str = Field(
-        description="Short explanation of how this chunk influenced the answer."
-    )
-
-
-class AttributionOutput(BaseModel):
-    """
-    Structured attribution result used by the glassbox UI.
-    """
-    influences: List[ChunkInfluence] = Field(
-        description="List of influence entries, one per selected chunk."
-    )
-
-
-def get_llm():
-    """Create the Valyu LLM client used for attribution scoring."""
-    return ValyuChat(
-        api_key=os.getenv("VALYU_API_TOKEN"),
-        team_id=os.getenv("VALYU_TEAM_ID"),
-        model=os.getenv("VALYU_MODEL"),
-        endpoint=os.getenv("VALYU_API_ENDPOINT"),
-        max_retries=2,
-    )
+from backend.agents.react_agent_setup import get_chat_model
 
 
 class AttributionAgent:
     """
-    Computes influence scores for all selected chunks.
+    Computes an influence score for each selected chunk.
 
     Input:
-        - ContextSelectionResult
-        - answer_output dict from AnswerAgent.run
+        context: ContextSelectionResult
+        answer_output: dict from AnswerAgent.run
 
-    Output dict:
-        - influence_scores: { chunk_id: float }
-        - influence_details: AttributionOutput as dict
+    Output:
+        dict:
+            {
+                "influence_scores": {chunk_id: float in [0, 1], ...}
+            }
     """
 
-    def __init__(self):
-        self.llm = get_llm()
+    def __init__(self) -> None:
+        self.llm = get_chat_model()
 
     @staticmethod
-    def _build_json_schema_hint(context: ContextSelectionResult) -> str:
-        """
-        Build a description of the JSON format we expect from the model.
-        """
-        chunk_ids = [sc.chunk.chunk_id for sc in context.selected_chunks]
-        ids_str = ", ".join(chunk_ids)
+    def _build_prompt(
+        context: ContextSelectionResult,
+        answer_output: dict,
+    ) -> str:
+        final_answer = answer_output["final_output"]
 
-        return (
-            "Return ONLY valid JSON with the following shape:\n"
-            "{\n"
-            '  "influences": [\n'
-            "    {\n"
-            '      "chunk_id": string,   // one of: '
-            f"{ids_str}\n"
-            '      "score": number,      // between 0 and 1\n'
-            '      "rationale": string   // short explanation\n'
-            "    },\n"
-            "    ...\n"
-            "  ]\n"
-            "}\n"
-        )
-
-    def _build_prompt(self, context: ContextSelectionResult, answer_output: dict) -> str:
-        """
-        Construct the attribution instruction block.
-
-        The model sees:
-            - final_output from the AnswerAgent
-            - all selected chunks with their text
-        """
-        final_output = answer_output["final_output"]
-        chunk_sections = []
+        chunk_blocks: list[str] = []
+        chunk_ids: list[str] = []
 
         for scored in context.selected_chunks:
             c = scored.chunk
-            chunk_sections.append(
+            chunk_ids.append(c.chunk_id)
+            chunk_blocks.append(
                 f"[{c.chunk_id}] from {c.file_path} (lines {c.start_line}-{c.end_line})\n"
                 f"{c.text.strip()}\n"
             )
 
-        all_chunks_text = "\n".join(chunk_sections)
-        schema_hint = self._build_json_schema_hint(context)
+        id_list = ", ".join(f'"{cid}"' for cid in chunk_ids)
+
+        schema_hint = (
+            "{\n"
+            '  "influence_scores": {\n'
+            f"    {id_list}: number between 0 and 1\n"
+            "  }\n"
+            "}"
+        )
 
         return (
-            "You are an attribution judge for a debugging assistant. "
-            "Your task is to estimate how much each context chunk contributed to "
-            "the final answer.\n\n"
-            "Guidelines:\n"
-            "- Score 0.0 means the chunk was not used at all.\n"
-            "- Score near 1.0 means the answer depends heavily on this chunk.\n"
-            "- Use intermediate values for partial influence.\n"
-            "- Base your judgement only on the content of the chunks and the final answer.\n\n"
-            f"Final answer:\n{final_output}\n\n"
-            f"Context chunks:\n{all_chunks_text}\n\n"
-            "Output format:\n"
+            "You are an attribution judge.\n"
+            "Your task is to estimate how much each context chunk influenced "
+            "the final answer. The score must be between 0 and 1.\n\n"
+            f"Final answer:\n{final_answer}\n\n"
+            "Context chunks:\n"
+            f"{''.join(chunk_blocks)}\n"
+            "Return only valid JSON with this shape:\n"
             f"{schema_hint}\n"
-            "Return only the JSON object, with no extra text."
         )
 
     def run(self, context: ContextSelectionResult, answer_output: dict) -> dict:
-        """
-        Generate influence scores for each chunk.
-
-        If the JSON is malformed, all scores fall back to zero.
-        """
         prompt = self._build_prompt(context, answer_output)
 
         messages = [
-            SystemMessage(content="Return only JSON, no prose."),
+            SystemMessage(content="Return only valid JSON. No explanation."),
             HumanMessage(content=prompt),
         ]
 
         raw = self.llm.invoke(messages).content.strip()
 
-        # Try to parse and validate the JSON
         try:
-            data = json.loads(raw)
-            structured = AttributionOutput(**data)
-        except (json.JSONDecodeError, ValidationError):
-            # Safe fallback - no influence
-            influences = [
-                ChunkInfluence(
-                    chunk_id=sc.chunk.chunk_id,
-                    score=0.0,
-                    rationale="Failed to parse attribution JSON.",
-                )
-                for sc in context.selected_chunks
-            ]
-            structured = AttributionOutput(influences=influences)
+            parsed = json.loads(raw)
+            scores = parsed.get("influence_scores", {})
+        except Exception:
+            # Safe fallback: zero for all chunks
+            scores = {sc.chunk.chunk_id: 0.0 for sc in context.selected_chunks}
 
-        # Build the simple dict for compatibility
+        # Ensure all chunks have a float score
         influence_scores = {
-            inf.chunk_id: inf.score for inf in structured.influences
+            sc.chunk.chunk_id: float(scores.get(sc.chunk.chunk_id, 0.0))
+            for sc in context.selected_chunks
         }
 
-        return {
-            "influence_scores": influence_scores,
-            "influence_details": structured.model_dump(),
-        }
+        return {"influence_scores": influence_scores}
