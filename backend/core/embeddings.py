@@ -9,8 +9,8 @@ import numpy as np
 class EmbeddingBackend(ABC):
     """
     Abstract interface so we can swap between:
-    - Dummy embeddings (for local dev)
-    - Real Bedrock / LangChain embeddings later
+      - DummyEmbeddingBackend (for local dev)
+      - Real embedding providers (Bedrock, OpenAI, etc.)
     """
 
     @abstractmethod
@@ -24,15 +24,17 @@ class EmbeddingBackend(ABC):
 class DummyEmbeddingBackend(EmbeddingBackend):
     """
     Deterministic pseudo-embedding based on Python's hash.
-    This is NOT semantically meaningful, but it's perfect for
-    wiring up the pipeline without needing a real LLM yet.
+
+    NOTE:
+      - This is NOT semantically meaningful.
+      - It is only used to reduce the number of candidates
+        passed to the LLM.
     """
 
     def embed_text(self, text: str) -> List[float]:
-        # Convert hash(text) into a random but deterministic vector
         h = hash(text)
         rng = np.random.default_rng(h & 0xFFFFFFFF)
-        vec = rng.normal(size=128)  # 128-dim vector
+        vec = rng.normal(size=128)
         norm = np.linalg.norm(vec) + 1e-8
         vec = vec / norm
         return vec.tolist()

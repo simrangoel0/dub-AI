@@ -11,3 +11,4 @@ python-dotenv
 httpx
 boto3       # For Bedrock (Holistic AI)
 langsmith
+langgraph
