@@ -37,7 +37,7 @@ class AnswerAgent:
     def run(self, ctx: ContextSelectionResult) -> Dict:
         """
         Returns:
-            dict with final_answer, used_chunks, full_prompt
+            dict with final_answer, used_chunks, full_prompt, response_context
         """
         chunk_block = self._format_chunks(ctx.selected_chunks)
         used = [sc.chunk.chunk_id for sc in ctx.selected_chunks]
@@ -71,8 +71,33 @@ class AnswerAgent:
 
         response_text = self.llm.invoke(messages).content.strip()
 
+        # Pipeline will fill messageId and runId later
+        response_context = {
+            "messageId": None,
+            "runId": None,
+            "chunks": [
+                {
+                    "id": sc.chunk.chunk_id,
+                    "selected": True,
+                    "influenceScore": 0.0,
+                    "rationale": sc.rationale
+                }
+                for sc in ctx.selected_chunks
+            ],
+            "droppedChunks": [
+                {
+                    "id": sc.chunk.chunk_id,
+                    "selected": False,
+                    "influenceScore": 0.0,
+                    "rationale": sc.rationale
+                }
+                for sc in ctx.dropped_chunks
+            ]
+        }
+
         return {
             "final_answer": response_text,
             "used_chunks": used,
             "full_prompt": system + "\n\n" + user,
+            "response_context": response_context
         }

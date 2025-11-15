@@ -7,12 +7,13 @@ from holistic_ai_bedrock import get_chat_model
 
 class AttributionAgent:
     """
-    Enhanced LLM-based attribution engine.
-
-    Improvements:
-    - Incorporates similarity scores, relevance scores and rationales.
-    - Encourages better evidence extraction from final answer.
-    - Produces high quality JSON validated through AttributionOutput.
+    Converts AttributionOutput into UI-ready structures:
+    - influence_scores: {chunk_id: float}
+    - response_context: {
+         messageId, runId,
+         chunks: [...],
+         droppedChunks: [...]
+      }
     """
 
     def __init__(self, model_name: str = "claude-3-5-sonnet"):
@@ -22,35 +23,83 @@ class AttributionAgent:
     def _build_prompt(self, selection: ContextSelectionResult, answer: dict) -> str:
         final_answer = answer["final_answer"]
 
-        header = (
-            "You are an influence attribution engine. "
-            "Your job is to determine how much each context chunk affected the final answer.\n\n"
-            "For each chunk, you must provide:\n"
-            "1. score between 0 and 1\n"
-            "2. 1 to 3 short evidence spans quoted from the final answer\n"
-            "3. one sentence explanation referencing the chunk id\n\n"
-            "Consider the following signals:\n"
-            "- similarity_score\n"
-            "- relevance_score\n"
-            "- chunk selection rationale\n"
-            "- overlap between chunk text and final answer\n\n"
+        text = (
+            "You are an attribution engine.\n"
+            "For each chunk, output:\n"
+            "- score in [0,1]\n"
+            "- 1–3 evidence spans quoted from the final answer\n"
+            "- one sentence explanation\n\n"
+            f"### Final Answer\n{final_answer}\n\n"
+            "### Chunks\n"
         )
 
-        block = "### Final Answer\n" + final_answer + "\n\n### Chunks\n"
-
-        for sc in selection.selected_chunks:
+        for sc in selection.selected_chunks + selection.dropped_chunks:
             c = sc.chunk
-            block += (
-                f"[{c.chunk_id}] from {c.file_path} (lines {c.start_line}-{c.end_line})\n"
+            text += (
+                f"[{c.chunk_id}] {c.file_path} lines {c.start_line}-{c.end_line}\n"
                 f"Similarity score: {sc.similarity_score}\n"
                 f"Relevance score: {sc.relevance_score}\n"
                 f"Selection rationale: {sc.rationale}\n"
-                f"Text:\n{c.text.strip()}\n\n"
+                f"{c.text.strip()}\n\n"
             )
 
-        return header + block
+        return text
 
-    def run(self, selection: ContextSelectionResult, answer: dict):
+    def run(
+        self,
+        selection: ContextSelectionResult,
+        answer: dict,
+        run_id: str,
+        message_id: str,
+    ):
         prompt = self._build_prompt(selection, answer)
-        result: AttributionOutput = self.llm.invoke(prompt)
-        return result.model_dump()
+        structured: AttributionOutput = self.llm.invoke(prompt)
+
+        # influence map for TraceLogger
+        influence_scores = {
+            entry.chunk_id: float(entry.score)
+            for entry in structured.chunks
+        }
+
+        # Explanations map
+        explanations = {
+            entry.chunk_id: {
+                "evidence": entry.evidence,
+                "explanation": entry.explanation
+            }
+            for entry in structured.chunks
+        }
+
+        # Build response context for the UI
+        def make_chunk(sc, selected: bool):
+            cid = sc.chunk.chunk_id
+            attrib = explanations.get(cid, {})
+            return {
+                "id": cid,
+                "selected": selected,
+                "influenceScore": influence_scores.get(cid, 0.0),
+                "rationale": sc.rationale,
+                "reasoning": attrib.get("explanation"),
+                "evidence": attrib.get("evidence", [])
+            }
+
+        selected_chunks = [
+            make_chunk(sc, True) for sc in selection.selected_chunks
+        ]
+        dropped_chunks = [
+            make_chunk(sc, False) for sc in selection.dropped_chunks
+        ]
+
+        response_context = {
+            "messageId": message_id,
+            "runId": run_id,
+            "chunks": selected_chunks,
+            "droppedChunks": dropped_chunks,
+        }
+
+        return {
+            "influence_scores": influence_scores,
+            "raw": structured.model_dump(),
+            "response_context": response_context,
+            "explanations": explanations,
+        }
