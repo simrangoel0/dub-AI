@@ -46,8 +46,8 @@ def init_langsmith(project_name: str = "glass-box-debugger") -> Optional[Client]
 
     # Default SaaS endpoint (change if you ever self-host). :contentReference[oaicite:3]{index=3}
     if not os.getenv("LANGSMITH_ENDPOINT"):
-        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-        print("[LangSmith] LANGSMITH_ENDPOINT set to 'https://api.smith.langchain.com'")
+        os.environ["LANGSMITH_ENDPOINT"] = "https:/eu.api.smith.langchain.com"
+        print("[LangSmith] LANGSMITH_ENDPOINT set to 'https://eu.api.smith.langchain.com'")
 
     # Group traces under a project (shows up in the LangSmith UI). :contentReference[oaicite:4]{index=4}
     if project_name:
