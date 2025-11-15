@@ -7,10 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# If you want type hints later:
-# from agents.context_manager_models import ContextSelectionResult, ScoredChunk
-
 # Resolve repo root and ensure /traces exists
+# (…/backend/observability/trace_logger.py -> parents[2] = repo root)
 BASE_DIR = Path(__file__).resolve().parents[2]
 TRACES_DIR = BASE_DIR / "traces"
 TRACES_DIR.mkdir(parents=True, exist_ok=True)
@@ -27,10 +25,10 @@ def _timestamp_for_filename() -> str:
 @dataclass
 class TraceLogger:
     """
-    Collects all data for a single pipeline run
-    and writes it to /traces/{timestamp}_{run_id}.json.
+    Collects all data for a single pipeline run and writes it to
+    /traces/{timestamp}_{run_id}.json.
 
-    This is Dev B's custom JSON "flight recorder".
+    This is your custom JSON "flight recorder" for the glassbox UI.
     """
 
     run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -42,7 +40,7 @@ class TraceLogger:
             "created_at": _now_iso(),
             "input": {},
             "steps": {},
-            "boost": {
+            "boost": {  # you can later rename this to "selection" if you want
                 "applied": False,
                 "boosted_chunks": [],
                 "reason": None,
@@ -64,12 +62,6 @@ class TraceLogger:
     ) -> None:
         """
         Store high-level inputs for this run.
-
-        - user_query: the current question
-        - conversation_history: chat so far, list of {role, content}
-        - top_k: how many chunks context manager tried to select
-        - initial_boost_chunks: any chunk_ids the user boosted for this run
-        - repo_state_summary: lightweight info about the repo, e.g. { "files": [...] }
         """
         self._data["input"] = {
             "user_query": user_query,
@@ -87,24 +79,14 @@ class TraceLogger:
         """
         Log Dev A1's ContextSelectionResult.
 
-        Expected shape (Pydantic):
-
-            class ContextSelectionResult(BaseModel):
-                query: str
-                top_k: int
-                selected_chunks: List[ScoredChunk]
-                dropped_chunks: List[ScoredChunk]
-                meta: Dict[str, Any] = {}
-
-        Where ScoredChunk has:
-            chunk: Chunk
-            similarity_score: float
-            relevance_score: float
-            rationale: str
-
-        This writes:
-          - steps.retrieve_step
-          - steps.scoring_step
+        Expected shape (after .model_dump()):
+            {
+              "query": str,
+              "top_k": int,
+              "selected_chunks": List[ScoredChunk],
+              "dropped_chunks": List[ScoredChunk],
+              "meta": Dict[str, Any]
+            }
         """
         selected_chunks = ctx_result.get("selected_chunks", [])
         dropped_chunks = ctx_result.get("dropped_chunks", [])
@@ -112,7 +94,7 @@ class TraceLogger:
         query = ctx_result.get("query")
         meta = ctx_result.get("meta", {})
 
-        # 1) retrieve_step: mostly a direct mirror of ContextSelectionResult
+        # 1) retrieve_step: mirror ContextSelectionResult
         retrieve_step = {
             "query": query,
             "top_k": top_k,
@@ -145,7 +127,6 @@ class TraceLogger:
 
         scoring_step = {
             "scores_by_chunk_id": scores_by_chunk_id,
-            # Dev A1 can add more details into ctx_result.meta["scoring_notes"]
             "policy_notes": meta.get("scoring_notes", []),
         }
 
@@ -169,16 +150,6 @@ class TraceLogger:
     ) -> None:
         """
         Optional: log summarisation information when the context manager compresses chunks.
-
-        Example summaries:
-            [
-              {
-                "summary_id": "sum_1",
-                "text": "High-level description...",
-                "source_chunk_ids": ["chunk_2", "chunk_5"]
-              },
-              ...
-            ]
         """
         self._data["steps"]["summary_step"] = {
             "used": used,
@@ -187,49 +158,62 @@ class TraceLogger:
         }
 
     # -------------------------------------------------------------------------
-    # STEP: ANSWER AGENT (Dev A2)
+    # STEP: ANSWER AGENT (Dev A2 – final answer)
     # -------------------------------------------------------------------------
 
     def log_answer_step(self, answer_result: Dict[str, Any]) -> None:
         """
-        Log Dev A2's answer agent output.
+        Log Dev A2's AnswerAgent output.
 
-        Expected keys in answer_result:
-            - final_prompt: str
-            - final_code: str
-            - answer_text: Optional[str]
-            - raw_llm_output: Optional[dict]
+        With the current AnswerAgent, we expect:
+            answer_result = {
+                "final_answer": str,      # human-readable answer
+                "used_chunks": [str, ...],
+                "full_prompt": str,       # full system + user prompt
+            }
+
+        We store:
+            steps.final_prompt
+            steps.answer.answer_text
+            steps.answer.used_chunks
         """
-        final_prompt = answer_result.get("final_prompt")
-        final_code = answer_result.get("final_code")
-        answer_text = answer_result.get("answer_text")
-        raw_llm_output = answer_result.get("raw_llm_output")
+        final_prompt = answer_result.get("full_prompt")
+        final_answer = answer_result.get("final_answer")
+        used_chunks = answer_result.get("used_chunks", [])
 
         self._data["steps"]["final_prompt"] = final_prompt
         self._data["steps"]["answer"] = {
-            "final_code": final_code,
-            "answer_text": answer_text,
-            "raw_llm_output": raw_llm_output,
+            "final_code": None,          # reserved for future patch/diff
+            "answer_text": final_answer,
+            "used_chunks": used_chunks,
         }
 
     # -------------------------------------------------------------------------
-    # STEP: ATTRIBUTION (Dev A2)
+    # STEP: ATTRIBUTION (Dev A2 – influence scores only)
     # -------------------------------------------------------------------------
 
     def log_attribution_step(self, attribution_result: Dict[str, Any]) -> None:
         """
-        Log Dev A2's attribution agent output.
+        Log Dev A2's AttributionAgent output.
 
-        Expected keys in attribution_result:
-            - influence_map: Dict[str, float]   (chunk_id -> score 0–1)
-            - explanations: Optional[Dict[str, str]]
+        We expect:
+            attribution_result = {
+                "influence_scores": { chunk_id: float in [0, 1], ... },
+                "raw": <full AttributionOutput dict>   # optional
+            }
+
+        We convert that into:
+            steps.influence_map = {
+              "entries": [ {chunk_id, score}, ... ],
+              "normalized": bool
+            }
+            steps.attribution_details = raw   (if present)
         """
-        influence_map_raw = attribution_result.get("influence_map", {})
+        scores = attribution_result.get("influence_scores", {}) or {}
 
-        # Convert dict[{chunk_id: score}] to a list of entries for easier plotting
         entries = [
             {"chunk_id": chunk_id, "score": float(score)}
-            for chunk_id, score in influence_map_raw.items()
+            for chunk_id, score in scores.items()
         ]
 
         total = sum(e["score"] for e in entries)
@@ -240,14 +224,12 @@ class TraceLogger:
             "normalized": normalized,
         }
 
-        explanations = attribution_result.get("explanations")
-        if explanations:
-            self._data["steps"]["attribution_details"] = {
-                "explanations": explanations
-            }
+        raw_details = attribution_result.get("raw")
+        if raw_details is not None:
+            self._data["steps"]["attribution_details"] = raw_details
 
     # -------------------------------------------------------------------------
-    # BOOST INFO (still useful even without rerun semantics)
+    # BOOST / SELECTION METADATA (optional)
     # -------------------------------------------------------------------------
 
     def log_boost(
@@ -257,10 +239,10 @@ class TraceLogger:
         reason: Optional[str] = None,
     ) -> None:
         """
-        Record boost actions for this run.
+        Record selection / "boost" metadata for this run.
 
-        - boost_chunks: list of chunk_ids the user boosted (if any)
-        - reason: short string, e.g. "initial run", "user boosted chunks in UI"
+        - boost_chunks: list of chunk_ids the UI considered especially important (if any)
+        - reason: short string, e.g. "single run", "user emphasised these chunks"
         """
         applied = bool(boost_chunks)
         self._data["boost"] = {
@@ -293,8 +275,8 @@ class TraceLogger:
 
 def load_trace_by_run_id(run_id: str) -> Optional[Dict[str, Any]]:
     """
-    Helper for /trace/{id}: find the latest file matching *_{run_id}.json
-    and return its JSON content as a dict.
+    Helper for /trace/{id}:
+    find the latest file matching *_{run_id}.json and return its JSON content.
     """
     matches = sorted(TRACES_DIR.glob(f"*_{run_id}.json"))
     if not matches:
@@ -303,4 +285,5 @@ def load_trace_by_run_id(run_id: str) -> Optional[Dict[str, Any]]:
     path = matches[-1]
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
 
