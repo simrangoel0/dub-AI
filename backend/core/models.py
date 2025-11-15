@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Chunk(BaseModel):
@@ -79,3 +79,23 @@ class ContextSelectionResult(BaseModel):
     selected_chunks: List[ScoredChunk]
     dropped_chunks: List[ScoredChunk]
     meta: Dict[str, Any] = {}
+    
+class ChunkAttribution(BaseModel):
+    """
+    Per-chunk influence data:
+    - score: model-judged relevance in [0,1]
+    - evidence: list of phrases from answer that trace back to this chunk
+    - explanation: short, high-level reason why this chunk influenced output
+    """
+    chunk_id: str
+    score: float = Field(..., ge=0.0, le=1.0)
+    evidence: List[str] = []
+    explanation: str = ""
+
+
+class AttributionOutput(BaseModel):
+    """
+    Final attribution result returned by AttributionAgent.
+    Used for observability, logging, and UI visualisation.
+    """
+    chunks: List[ChunkAttribution]
