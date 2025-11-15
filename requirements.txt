@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+langchain
+langchain-community
+langchain-core
+pydantic
+faiss-cpu
+numpy
+python-dotenv
+httpx
+boto3       # For Bedrock (Holistic AI)
+langsmith
