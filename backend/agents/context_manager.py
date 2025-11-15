@@ -128,3 +128,99 @@ class CodebaseIndex:
             start = end
 
         return chunks
+
+def apply_relevance_policy(
+    scored_chunks: List[ScoredChunk],
+    boost_chunks: Optional[List[str]] = None,
+    disable_chunks: Optional[List[str]] = None,
+) -> List[ScoredChunk]:
+    """
+    A1.4 — Relevance scoring policy (simple version for now):
+    - If chunk_id in disable_chunks -> relevance_score = 0
+    - If chunk_id in boost_chunks -> relevance_score *= 1.5
+    - Boost chunks containing WARNING / SECURITY in text
+    You can make this smarter later or add an LLM mini-judge.
+    """
+    boost_chunks = set(boost_chunks or [])
+    disable_chunks = set(disable_chunks or [])
+
+    updated: List[ScoredChunk] = []
+
+    for sc in scored_chunks:
+        c = sc.chunk
+        score = sc.similarity_score
+        rationale_parts: List[str] = [sc.rationale]
+
+        # Disabled chunks are effectively dropped
+        if c.chunk_id in disable_chunks:
+            new_score = 0.0
+            rationale_parts.append("Explicitly disabled by user.")
+        else:
+            new_score = score
+
+            # User boost
+            if c.chunk_id in boost_chunks:
+                new_score *= 1.5
+                rationale_parts.append("Boosted due to user 'boost' selection.")
+
+            # Heuristic: boost warnings / security comments
+            upper_text = c.text.upper()
+            if "WARNING" in upper_text or "SECURITY" in upper_text:
+                new_score *= 1.2
+                rationale_parts.append("Boosted due to WARNING/SECURITY marker.")
+
+        updated.append(
+            ScoredChunk(
+                chunk=c,
+                similarity_score=score,
+                relevance_score=new_score,
+                rationale=" ".join(rationale_parts),
+            )
+        )
+
+    # Re-sort by relevance_score
+    updated.sort(key=lambda sc: sc.relevance_score, reverse=True)
+    return updated
+
+
+def select_context(
+    index: CodebaseIndex,
+    query: str,
+    top_k: int = 8,
+    boost_chunks: Optional[List[str]] = None,
+    disable_chunks: Optional[List[str]] = None,
+) -> ContextSelectionResult:
+    """
+    High-level API Dev B and Dev A2 will use.
+
+    Steps:
+    1. Retrieve chunks by raw semantic similarity
+    2. Apply relevance policy (boost/penalise)
+    3. Split into selected vs dropped chunks
+    """
+    # Step 1 — initial retrieval
+    raw_scored = index.retrieve_raw(query=query, top_k=top_k * 2)
+    # (We retrieve more than top_k, then let policy refine.)
+
+    # Step 2 — policy
+    scored_with_policy = apply_relevance_policy(
+        raw_scored,
+        boost_chunks=boost_chunks,
+        disable_chunks=disable_chunks,
+    )
+
+    # Step 3 — select top_k by relevance_score
+    selected = scored_with_policy[:top_k]
+    dropped = scored_with_policy[top_k:]
+
+    result = ContextSelectionResult(
+        query=query,
+        top_k=top_k,
+        selected_chunks=selected,
+        dropped_chunks=dropped,
+        meta={
+            "boost_chunks": boost_chunks or [],
+            "disable_chunks": disable_chunks or [],
+        },
+    )
+    return result
