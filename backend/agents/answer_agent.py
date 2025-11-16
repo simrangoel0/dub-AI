@@ -63,6 +63,11 @@ class AnswerAgent:
             "Analysis: short, high level, grounded in chunk ids.\n"
             "Final Answer: solve the query.\n"
         )
+        
+        summary_prompt = (
+        "Summarise the assistant’s final answer in one sentence. "
+        "Keep it short and clear."
+    )
 
         messages = [
             SystemMessage(content=system),
@@ -70,6 +75,20 @@ class AnswerAgent:
         ]
 
         response_text = self.llm.invoke(messages).content.strip()
+        
+        # Generate short summary for timeline
+        summary_prompt = (
+            "Summarise the assistant’s final answer in one sentence. "
+            "Keep it short and clear."
+        )
+
+        summary_messages = [
+            SystemMessage(content="You summarise technical answers."),
+            HumanMessage(content=f"Final answer:\n{response_text}\n\n{summary_prompt}")
+        ]
+
+        summary_text = self.llm.invoke(summary_messages).content.strip()
+
 
         # Pipeline will fill messageId and runId later
         response_context = {
@@ -99,5 +118,6 @@ class AnswerAgent:
             "final_answer": response_text,
             "used_chunks": used,
             "full_prompt": system + "\n\n" + user,
-            "response_context": response_context
+            "response_context": response_context,
+            "summary": summary_text
         }

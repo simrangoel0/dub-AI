@@ -53,18 +53,18 @@ class ChatMessage(Base):
 class Run(Base):
     __tablename__ = "runs"
 
-    run_id = Column(String, primary_key=True)  # UUID from TraceLogger
+    run_id = Column(String, primary_key=True)
     message_id = Column(String, nullable=False)
     conversation_id = Column(String, nullable=False, index=True)
     user_query = Column(Text, nullable=False)
+    run_label = Column(String, nullable=True)      # <--- ADD THIS
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     top_k = Column(Integer)
-    selection_mode = Column(String)           # "agent" | "user"
-    trace_file = Column(String)               # path to JSON trace
-    repo_snapshot = Column(Text)              # JSON, optional
+    selection_mode = Column(String)
+    trace_file = Column(String)
+    repo_snapshot = Column(Text)
 
-    # relationships
     chunks = relationship("RunChunk", back_populates="run", cascade="all, delete-orphan")
     attributions = relationship("AttributionRow", back_populates="run", cascade="all, delete-orphan")
 
@@ -185,6 +185,7 @@ def persist_run(
     message_id: str,
     conversation_id: str,
     user_query: str,
+    run_label: Optional[str],
     ctx: ContextSelectionResult,
     answer_result: Dict[str, Any],
     attribution_result: Dict[str, Any],
@@ -205,6 +206,7 @@ def persist_run(
             message_id=message_id,
             conversation_id=conversation_id,
             user_query=user_query,
+            run_label=run_label,
             top_k=ctx.top_k,
             selection_mode=ctx.meta.get("selection_mode"),
             trace_file=trace_file,

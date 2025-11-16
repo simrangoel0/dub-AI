@@ -39,6 +39,7 @@ class RunResponse(BaseModel):
     answer: Dict[str, Any]
     context: Dict[str, Any]
     attribution: Dict[str, Any]
+    summary: Optional[str] = None
 
 
 class TraceResponse(BaseModel):
@@ -65,6 +66,9 @@ class TimelineItem(BaseModel):
     created_at: datetime
     selection_mode: Optional[str] = None
     top_k: Optional[int] = None
+    
+    runLabel: Optional[str] = None      
+    summary: Optional[str] = None      
 
 
 class ContextNodeStats(BaseModel):
@@ -187,7 +191,6 @@ def api_run(body: RunRequest):
     }
 
     result = run_pipeline(payload)
-
     return RunResponse(
         run_id=result["run_id"],
         message_id=result["message_id"],
@@ -195,6 +198,7 @@ def api_run(body: RunRequest):
         answer=result["answer"],
         context=result["context"],
         attribution=result["attribution"],
+        summary=result.get("summary"),
     )
 
 
@@ -267,22 +271,27 @@ def get_trace_timeline(limit: int = Query(50, ge=1, le=500)):
     try:
         rows = (
             db.query(Run)
-            .order_by(Run.created_at.desc())
+            .order_by(Run.created_at.asc())  # oldest first so numbering makes sense
             .limit(limit)
             .all()
         )
-        return [
-            TimelineItem(
-                run_id=row.run_id,
-                message_id=row.message_id,
-                conversation_id=row.conversation_id,
-                user_query=row.user_query,
-                created_at=row.created_at,
-                selection_mode=row.selection_mode,
-                top_k=row.top_k,
+
+        timeline = []
+        for i, row in enumerate(rows, start=1):
+            timeline.append(
+                TimelineItem(
+                    run_id=row.run_id,
+                    message_id=row.message_id,
+                    conversation_id=row.conversation_id,
+                    user_query=row.user_query,
+                    created_at=row.created_at,
+                    selection_mode=row.selection_mode,
+                    top_k=row.top_k,
+                    runLabel=f"Debug run {i}",     
+                    summary=row.run_label,         # <-- SEND SUMMARY 
+                )
             )
-            for row in rows
-        ]
+        return timeline
     finally:
         db.close()
 

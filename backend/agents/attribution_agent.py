@@ -59,6 +59,9 @@ class AttributionAgent:
         message_id: str,
     ):
         prompt = self._build_prompt(selection, answer)
+        
+        print("breaking prompt")
+        print(prompt)
         structured: AttributionOutput = self.llm.invoke(prompt)
 
         # influence map for TraceLogger
