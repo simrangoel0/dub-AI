@@ -130,7 +130,6 @@ class TraceLogger:
 
         self._data["steps"]["final_prompt"] = final_prompt
         self._data["steps"]["answer"] = {
-            "final_code": None,
             "answer_text": final_answer,
             "used_chunks": used_chunks,
         }
