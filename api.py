@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.pipeline import run_pipeline
@@ -141,6 +142,19 @@ class ChunkDetailResponse(BaseModel):
 
 app = FastAPI(title="Glass-Box Debugging Agent API")
 
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Initialise LangSmith once (optional – will no-op if no key)
 init_langsmith(project_name="glass-box-debugger")
 
@@ -247,7 +261,7 @@ def get_chat_messages(
 
 # ---------- 2. GET /api/trace/timeline ----------
 
-@app.get("/api/trace/timeline", response_model=List[TimelineItem])
+@app.get("/api/trace-timeline", response_model=List[TimelineItem])
 def get_trace_timeline(limit: int = Query(50, ge=1, le=500)):
     db = SessionLocal()
     try:
