@@ -11,6 +11,7 @@ from backend.core.embeddings import (
     DummyEmbeddingBackend,
     cosine_similarity,
 )
+from backend.db import seed_chunks_from_index
 
 # LangGraph / LangChain imports
 from langgraph.prebuilt import create_react_agent
@@ -300,6 +301,7 @@ class ContextManager:
             chunk_max_lines=chunk_max_lines,
         )
         self.index.build_index()
+        seed_chunks_from_index(self.index)
 
         self.agent = ContextSelectionAgent(model_name=model_name)
 

@@ -8,7 +8,9 @@ from backend.agents.answer_agent import AnswerAgent
 from backend.agents.attribution_agent import AttributionAgent
 from backend.observability.trace_logger import TraceLogger
 from backend.observability.traced_agents import traced_context_manager
+from backend.db import init_db, persist_run, persist_chat_messages
 
+init_db()
 answer_agent = AnswerAgent(model_name="claude-3-5-sonnet")
 attribution_agent = AttributionAgent(model_name="claude-3-5-sonnet")
 
@@ -38,6 +40,9 @@ def run_pipeline(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(repo_state, dict)
         else None,
     )
+
+    conversation_id = payload.get("conversation_id", "default")
+    persist_chat_messages(conversation_id, conversation_history)
 
     # Step 2: context selection
     ctx_result: ContextSelectionResult = traced_context_manager(
@@ -96,6 +101,20 @@ def run_pipeline(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Step 6: save full trace file
     trace_file = trace.save()
+
+    # Step 7: persist into DB
+    conversation_id = payload.get("conversation_id", "default")
+
+    persist_run(
+        run_id=trace.run_id,
+        message_id=message_id,
+        conversation_id=conversation_id,
+        user_query=user_query,
+        ctx=ctx_result,
+        answer_result=answer_result,
+        attribution_result=attribution_result,
+        trace_file=trace_file,
+    )
 
     # Final response to UI
     return {

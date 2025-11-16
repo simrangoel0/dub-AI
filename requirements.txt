@@ -13,3 +13,4 @@ boto3       # For Bedrock (Holistic AI)
 langsmith
 langgraph
 langchain-openai
+sqlalchemy
