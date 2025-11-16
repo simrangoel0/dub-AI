@@ -25,22 +25,28 @@ class AttributionAgent:
 
         text = (
             "You are an attribution engine.\n"
-            "For each chunk, output:\n"
-            "- score in [0,1]\n"
-            "- 1–3 evidence spans quoted from the final answer\n"
-            "- one sentence explanation\n\n"
+            "For EACH CHUNK you MUST produce a JSON object with EXACTLY these keys:\n"
+            "{\n"
+            "  \"chunk_id\": string,\n"
+            "  \"score\": float between 0 and 1,\n"
+            "  \"evidence\": list of 1–3 short quotes taken from the final answer,\n"
+            "  \"explanation\": one sentence\n"
+            "}\n\n"
+            "Do NOT omit chunk_id. Do NOT change field names.\n"
+            "Your output MUST match the JSON schema.\n\n"
             f"### Final Answer\n{final_answer}\n\n"
-            "### Chunks\n"
+            "### Chunks (use the EXACT chunk_id shown):\n"
         )
 
         for sc in selection.selected_chunks + selection.dropped_chunks:
             c = sc.chunk
             text += (
-                f"[{c.chunk_id}] {c.file_path} lines {c.start_line}-{c.end_line}\n"
-                f"Similarity score: {sc.similarity_score}\n"
-                f"Relevance score: {sc.relevance_score}\n"
-                f"Selection rationale: {sc.rationale}\n"
-                f"{c.text.strip()}\n\n"
+                f"- chunk_id: {c.chunk_id}\n"
+                f"  file: {c.file_path} ({c.start_line}-{c.end_line})\n"
+                f"  similarity_score: {sc.similarity_score}\n"
+                f"  relevance_score: {sc.relevance_score}\n"
+                f"  rationale: {sc.rationale}\n"
+                f"  text:\n{c.text.strip()}\n\n"
             )
 
         return text
