@@ -183,9 +183,10 @@ class TraceLogger:
 
         self._data["steps"]["final_prompt"] = final_prompt
         self._data["steps"]["answer"] = {
-            "final_code": None,          # reserved for future patch/diff
+            "final_code": None,
             "answer_text": final_answer,
             "used_chunks": used_chunks,
+            "response_context": answer_result.get("response_context"),
         }
 
     # -------------------------------------------------------------------------
@@ -227,6 +228,11 @@ class TraceLogger:
         raw_details = attribution_result.get("raw")
         if raw_details is not None:
             self._data["steps"]["attribution_details"] = raw_details
+        
+        # NEW — store UI attribution response context
+        attrib_response_ctx = attribution_result.get("response_context")
+        if attrib_response_ctx:
+            self._data["steps"]["attribution_response_context"] = attrib_response_ctx
 
     # -------------------------------------------------------------------------
     # BOOST / SELECTION METADATA (optional)

@@ -6,7 +6,6 @@ from langsmith import traceable
 from backend.core.models import ContextSelectionResult
 from backend.agents.context_manager import ContextManager
 
-
 @traceable(
     run_type="chain",
     name="context_manager",
